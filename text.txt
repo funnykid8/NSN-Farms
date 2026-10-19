@@ -1,0 +1,203 @@
+
+
+
+
+import Foundation
+import SwiftData
+
+@MainActor
+enum NSNDatabase {
+    static let schema = Schema([
+        CropMaster.self,
+        ExpenseMaster.self,
+        RevenueMaster.self,
+        EmployeeMaster.self,
+        FarmExpense.self,
+        FarmRevenue.self,
+        SeasonalAttendance.self,
+        WorkerAdvance.self,
+        SeasonalPaymentSettlement.self,
+        MonthlyPayrollRecord.self,
+        FarmBalanceSheetEntry.self
+    ])
+    
+    static func createOfflineContainer(inMemory: Bool = false) throws -> ModelContainer {
+        let configuration = ModelConfiguration(
+            "NSNFarmsLocalStore",
+            schema: schema,
+            isStoredInMemoryOnly: inMemory,
+            allowsSave: true,
+            cloudKitDatabase: .none
+        )
+        
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        DataSeeder.seedDefaultMastersIfNeeded(context: container.mainContext)
+        return container
+    }
+}
+
+@MainActor
+struct DataSeeder {
+    
+    static func seedDefaultMastersIfNeeded(context: ModelContext) {
+        do {
+            let existingCropsCount = try context.fetchCount(FetchDescriptor<CropMaster>())
+            let existingExpensesCount = try context.fetchCount(FetchDescriptor<ExpenseMaster>())
+            
+            if existingCropsCount == 0 {
+                seedDefaultCrops(context: context)
+            } else {
+                var overheadCheck = FetchDescriptor<CropMaster>(
+                    predicate: #Predicate { $0.isSystemOverhead == true }
+                )
+                overheadCheck.fetchLimit = 1
+                if try context.fetch(overheadCheck).isEmpty {
+                    let overhead = CropMaster(
+                        cropName: "General Farm Overhead",
+                        cropType: .overhead,
+                        plotOrFieldName: "Entire Farm",
+                        areaInAcres: 0.0,
+                        status: .active,
+                        isSystemOverhead: true,
+                        notes: "Default cost center for shared expenses like tractor maintenance, general diesel, land rent, and electricity."
+                    )
+                    context.insert(overhead)
+                }
+            }
+            
+            if existingExpensesCount == 0 {
+                seedDefaultExpenseCategories(context: context)
+            }
+            
+            let existingBuyersCount = try context.fetchCount(FetchDescriptor<RevenueMaster>())
+            if existingBuyersCount == 0 {
+                seedDefaultRevenueSources(context: context)
+            }
+            
+            try context.save()
+        } catch {
+            print("NSN Farms Seeder Error: \(error.localizedDescription)")
+        }
+    }
+    
+    private static func seedDefaultCrops(context: ModelContext) {
+        let cal = Calendar.current
+        let today = Date.now
+        let twoMonthsAgo = cal.date(byAdding: .month, value: -2, to: today) ?? today
+        let oneYearAgo = cal.date(byAdding: .year, value: -1, to: today) ?? today
+        
+        let defaultCrops: [CropMaster] = [
+            CropMaster(
+                cropName: "General Farm Overhead",
+                cropType: .overhead,
+                plotOrFieldName: "All Plots",
+                areaInAcres: 0.0,
+                startDate: oneYearAgo,
+                status: .active,
+                isSystemOverhead: true,
+                notes: "System cost center for shared farm overheads."
+            ),
+            CropMaster(
+                cropName: "Coconut Palms",
+                cropType: .perennial,
+                plotOrFieldName: "Main Grove",
+                areaInAcres: 10.0,
+                startDate: oneYearAgo,
+                status: .active,
+                isSystemOverhead: false,
+                notes: "Perennial coconut plantation."
+            ),
+            CropMaster(
+                cropName: "American Sweet Corn",
+                cropType: .seasonalBatch,
+                plotOrFieldName: "Plot A",
+                areaInAcres: 3.5,
+                startDate: twoMonthsAgo,
+                status: .active,
+                isSystemOverhead: false,
+                notes: "Fresh vegetable sweet corn batch."
+            ),
+            CropMaster(
+                cropName: "Small Onion (Shallots)",
+                cropType: .seasonalBatch,
+                plotOrFieldName: "Plot B",
+                areaInAcres: 2.5,
+                startDate: twoMonthsAgo,
+                status: .active,
+                isSystemOverhead: false,
+                notes: "Seasonal small onion cultivation."
+            )
+        ]
+        
+        for crop in defaultCrops {
+            context.insert(crop)
+        }
+    }
+    
+    private static func seedDefaultExpenseCategories(context: ModelContext) {
+        let categories: [ExpenseMaster] = [
+            ExpenseMaster(categoryName: "Diesel & Fuel", defaultUnit: .liters, isDirectCropCost: false, iconName: "fuelpump.fill"),
+            ExpenseMaster(categoryName: "Seeds & Saplings", defaultUnit: .kg, isDirectCropCost: true, iconName: "leaf.fill"),
+            ExpenseMaster(categoryName: "Fertilizers & Manures", defaultUnit: .bags, isDirectCropCost: true, iconName: "shippingbox.fill"),
+            ExpenseMaster(categoryName: "Pesticides & Crop Care", defaultUnit: .liters, isDirectCropCost: true, iconName: "drop.triangle.fill"),
+            ExpenseMaster(categoryName: "Land Rent & Lease", defaultUnit: .lumpSum, isDirectCropCost: false, iconName: "map.fill"),
+            ExpenseMaster(categoryName: "Electricity & Motor Pump", defaultUnit: .lumpSum, isDirectCropCost: false, iconName: "bolt.fill"),
+            ExpenseMaster(categoryName: "Tractor & Equipment Service", defaultUnit: .lumpSum, isDirectCropCost: false, iconName: "wrench.and.screwdriver.fill"),
+            ExpenseMaster(categoryName: "Miscellaneous Farm Expense", defaultUnit: .lumpSum, isDirectCropCost: false, iconName: "ellipsis.circle.fill")
+        ]
+        
+        for category in categories {
+            context.insert(category)
+        }
+    }
+    
+    private static func seedDefaultRevenueSources(context: ModelContext) {
+        let buyers: [RevenueMaster] = [
+            RevenueMaster(buyerOrSourceName: "Farm Gate Direct Buyer", defaultUnit: .nutsOrPieces),
+            RevenueMaster(buyerOrSourceName: "Wholesale Mandi / Market Trader", defaultUnit: .quintal),
+            RevenueMaster(buyerOrSourceName: "Vegetable Commission Merchant", defaultUnit: .kg)
+        ]
+        
+        for buyer in buyers {
+            context.insert(buyer)
+        }
+    }
+    
+    static func seedSampleTransactions(context: ModelContext) {
+        do {
+            seedDefaultMastersIfNeeded(context: context)
+            let crops = try context.fetch(FetchDescriptor<CropMaster>())
+            let expenseCats = try context.fetch(FetchDescriptor<ExpenseMaster>())
+            let buyers = try context.fetch(FetchDescriptor<RevenueMaster>())
+            
+            let overheadCrop = crops.first(where: { $0.isSystemOverhead })
+            let coconutCrop = crops.first(where: { $0.cropName.contains("Coconut") }) ?? overheadCrop
+            let sweetCornCrop = crops.first(where: { $0.cropName.contains("Sweet Corn") }) ?? overheadCrop
+            
+            let dieselCat = expenseCats.first(where: { $0.categoryName.contains("Diesel") })
+            let seedsCat = expenseCats.first(where: { $0.categoryName.contains("Seeds") })
+            
+            let supervisor = EmployeeMaster(name: "Murugan K", employeeType: .monthly, roleOrSkill: "Supervisor", monthlySalary: 18000, phone: "9842011223")
+            let worker = EmployeeMaster(name: "Lakshmi S", employeeType: .seasonal, roleOrSkill: "Harvesting", defaultDailyWage: 450, phone: "9842044556")
+            
+            context.insert(supervisor)
+            context.insert(worker)
+            
+            if let dieselCat, let overheadCrop {
+                context.insert(FarmExpense(date: .now, expenseCategory: dieselCat, crop: overheadCrop, amount: 4500, quantity: 50, unit: .liters, vendorName: "IndianOil"))
+            }
+            if let seedsCat, let sweetCornCrop {
+                context.insert(FarmExpense(date: .now, expenseCategory: seedsCat, crop: sweetCornCrop, amount: 12000, quantity: 5, unit: .kg, vendorName: "Agro Seeds"))
+            }
+            if let coconutCrop, let firstBuyer = buyers.first {
+                context.insert(FarmRevenue(date: .now, crop: coconutCrop, buyerMaster: firstBuyer, quantity: 2000, unit: .nutsOrPieces, ratePerUnit: 15))
+            }
+            
+            try context.save()
+        } catch {
+            print("Seeding sample data failed: \(error.localizedDescription)")
+        }
+    }
+}
+text.txt
+Displaying NSN_Farms_App_Entry_Point.swift.
